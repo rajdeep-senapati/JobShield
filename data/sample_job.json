@@ -1,0 +1,10 @@
+{
+  "title": "Data Analyst",
+  "company": "Example Corp",
+  "location": "Bangalore, India",
+  "description": "We are looking for a Data Analyst to analyze business data, build dashboards, and generate actionable insights. The candidate should work with Python and SQL and have experience with Power BI.",
+  "skills": ["Python", "SQL", "Power BI", "Data Analysis", "Dashboarding"],
+  "employment_type": "Full-time",
+  "source": "Example Jobs",
+  "url": "https://example.com/job/123"
+}
