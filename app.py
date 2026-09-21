@@ -85,6 +85,7 @@ if st.button("🔍 Analyze Job", use_container_width=True):
         result = analyze_job(
             resume_profile,
             job,
+            job_profile,
             client,
         )
 
@@ -96,23 +97,40 @@ if st.button("🔍 Analyze Job", use_container_width=True):
     st.header("🎯 Job Match")
 
     match = result["match"]
+    summary = match["summary"]
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("Match Score", f"{match['match_score']}%")
+        st.metric("Requirements", summary["total_requirements"])
 
     with col2:
-        st.metric("Skill Match", f"{match['skill_match']['skill_match_percentage']}%")
+        st.metric("Exact Matches", summary["exact_matches"])
 
     with col3:
-        st.metric("Title Match", "Yes" if match["title_match"]["title_match"] else "No")
+        st.metric("Related Matches", summary["related_matches"])
 
-    st.subheader("Matched Skills")
-    st.write(", ".join(match["skill_match"]["matched_skills"]) or "None detected")
+    st.subheader("Requirement Analysis")
 
-    st.subheader("Missing Skills")
-    st.write(", ".join(match["skill_match"]["missing_skills"]) or "None detected")
+    for item in match["matches"]:
+        requirement = item["requirement"]
+        evidence = item["evidence"]
+        match_type = item["match_type"]
+
+        if match_type == "exact":
+            st.success(f"✅ {requirement}")
+            st.caption(f"Resume evidence: {evidence}")
+
+        elif match_type == "related":
+            st.info(f"🔗 {requirement}")
+            st.caption(
+                f"Related resume evidence: {evidence} "
+                f"(similarity: {item['similarity']:.2f})"
+            )
+
+        else:
+            st.warning(f"❌ {requirement}")
+            st.caption("No strong supporting evidence found in the resume.")
 
     st.divider()
 
