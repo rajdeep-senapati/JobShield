@@ -21,3 +21,15 @@ def load_job_from_json(file_path: str) -> Job:
         job_data = json.load(file)
 
     return load_job(job_data)
+
+
+def load_job_from_profile(job_profile: dict) -> Job:
+    return Job(
+        title=job_profile.get("title", ""),
+        company=job_profile.get("company", ""),
+        location=job_profile.get("location", ""),
+        description=job_profile.get("description", ""),
+        skills=job_profile.get("skills", []),
+        employment_type=job_profile.get("employment_type", ""),
+        source="User Input",
+    )

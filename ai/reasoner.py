@@ -1,8 +1,6 @@
 import json
 
-from groq import Groq
-
-MODEL = "openai/gpt-oss-120b"
+from ai.router import get_reasoning_response
 
 
 def generate_job_reasoning(
@@ -10,7 +8,7 @@ def generate_job_reasoning(
     job,
     match_result: dict,
     risk_result: dict,
-    client: Groq,
+    client,
 ) -> dict:
 
     context = {
@@ -47,15 +45,12 @@ Rules:
 - Do not invent information.
 - Use the deterministic match and risk results as evidence.
 - Do not override or contradict those results.
-- Explain why the candidate matches or does not match the job.
+- Explain the candidate-job alignment using evidence from the resume.
 - Explain detected job-risk signals in plain language.
 - If no risk signals are detected, say that no predefined risk indicators were found.
 - Do not describe a low risk level as evidence that a job is unlikely to be a scam.
-- State only which predefined risk indicators were or were not detected.
-- Suggest resume improvements only when they directly address a missing job skill, requirement, or keyword.
-- Do not invent tools, techniques, experience, or qualifications.
-- Do not suggest adding a skill unless the resume already demonstrates evidence of it.
-- Do not suggest generic resume improvements unrelated to this specific job.
+- Suggest resume improvements only when directly supported by the resume and job.
+- Do not invent skills, experience, or qualifications.
 - Do not claim that a job is definitely a scam or definitely legitimate.
 - Do not make the final application decision for the user.
 - "recommendation_context" should summarize factors the user can consider.
@@ -65,16 +60,22 @@ JOBSHIELD DATA:
 {json.dumps(context, indent=2)}
 """
 
-    response = client.chat.completions.create(
-        model=MODEL,
+    result = get_reasoning_response(
         messages=[
             {
                 "role": "user",
                 "content": prompt,
             }
         ],
-        temperature=0,
-        response_format={"type": "json_object"},
+        client=client,
+        stream=False,
     )
 
-    return json.loads(response.choices[0].message.content)
+    content = result["response"].choices[0].message.content
+
+    reasoning = json.loads(content)
+
+    reasoning["_model"] = result["model"]
+    reasoning["_fallback_used"] = result["fallback_used"]
+
+    return reasoning

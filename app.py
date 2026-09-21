@@ -10,7 +10,8 @@ from resume.parser import extract_resume_text
 from resume.cleaner import clean_resume_text
 from resume.extractor import extract_resume_profile
 from analysis.analyzer import analyze_job
-from job.schema import Job
+from job.extractor import extract_job_profile
+from job.loader import load_job_from_profile
 
 load_dotenv()
 
@@ -69,13 +70,16 @@ if st.button("🔍 Analyze Job", use_container_width=True):
         resume_profile = extract_resume_profile(cleaned_text, client)
 
         # Temporary job object
-        job = Job(
-            title="Job Description",
-            company="User Provided",
-            description=job_text,
-            skills=[],
-            source="User Input",
-        )
+        job_profile = extract_job_profile(job_text, client)
+
+        job = load_job_from_profile(job_profile)
+
+        with st.expander("🔍 Debug: Extracted Data"):
+            st.subheader("Extracted JD Profile")
+            st.json(job_profile)
+
+            st.subheader("Extracted Resume Profile")
+            st.json(resume_profile)
 
         # Run existing analysis pipeline
         result = analyze_job(

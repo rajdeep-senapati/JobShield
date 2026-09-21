@@ -5,11 +5,57 @@ def normalize_skill(skill: str) -> str:
         "powerbi": "power bi",
         "scikit learn": "scikit-learn",
         "sklearn": "scikit-learn",
-        "pytorch": "pytorch",
         "py torch": "pytorch",
     }
 
     return aliases.get(skill, skill)
+
+
+def get_resume_skills(resume_profile: dict) -> set:
+    skills = set()
+
+    for category in resume_profile.get("skills", {}).values():
+        for skill in category:
+            skills.add(normalize_skill(skill))
+
+    return skills
+
+
+def get_resume_evidence(resume_profile: dict) -> set:
+    evidence = set()
+
+    for skill in get_resume_skills(resume_profile):
+        evidence.add(skill)
+
+    for experience in resume_profile.get("experience", []):
+        evidence.add(normalize_skill(experience.get("role", "")))
+        evidence.add(normalize_skill(experience.get("description", "")))
+
+    for project in resume_profile.get("projects", []):
+        evidence.add(normalize_skill(project.get("name", "")))
+        evidence.add(normalize_skill(project.get("description", "")))
+
+        for technology in project.get("technologies", []):
+            evidence.add(normalize_skill(technology))
+
+    return {item for item in evidence if item}
+
+
+def match_skills(resume_profile: dict, job) -> dict:
+    resume_skills = get_resume_skills(resume_profile)
+
+    job_skills = {normalize_skill(skill) for skill in job.skills}
+
+    matched = resume_skills & job_skills
+    missing = job_skills - resume_skills
+
+    match_percentage = len(matched) / len(job_skills) * 100 if job_skills else 0
+
+    return {
+        "matched_skills": sorted(matched),
+        "missing_skills": sorted(missing),
+        "skill_match_percentage": round(match_percentage, 2),
+    }
 
 
 def match_job_title(resume_profile: dict, job) -> dict:
@@ -29,35 +75,15 @@ def match_job_title(resume_profile: dict, job) -> dict:
     }
 
 
-def match_skills(resume_profile: dict, job) -> dict:
-    resume_skills = set()
-
-    for category in resume_profile.get("skills", {}).values():
-        for skill in category:
-            resume_skills.add(normalize_skill(skill))
-
-    job_skills = {normalize_skill(skill) for skill in job.skills}
-
-    matched = resume_skills & job_skills
-    missing = job_skills - resume_skills
-
-    match_percentage = len(matched) / len(job_skills) * 100 if job_skills else 0
-
-    return {
-        "matched_skills": sorted(matched),
-        "missing_skills": sorted(missing),
-        "skill_match_percentage": round(match_percentage, 2),
-    }
-
-
 def analyze_job_match(resume_profile: dict, job) -> dict:
     skill_result = match_skills(resume_profile, job)
+
     title_result = match_job_title(resume_profile, job)
 
     skill_score = skill_result["skill_match_percentage"]
     title_score = 100 if title_result["title_match"] else 0
 
-    final_score = (skill_score * 0.70) + (title_score * 0.30)
+    final_score = skill_score * 0.70 + title_score * 0.30
 
     return {
         "job_title": job.title,
