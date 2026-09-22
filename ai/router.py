@@ -3,11 +3,7 @@ import os
 from groq import Groq
 
 PRIMARY_MODEL = "openai/gpt-oss-120b"
-FALLBACK_MODEL = "openai/gpt-oss-20b"
-
-
-def get_client() -> Groq:
-    return Groq(api_key=os.getenv("GROQ_API_KEY"))
+FALLBACK_MODEL = "qwen/qwen3.8-27b"
 
 
 def get_reasoning_response(

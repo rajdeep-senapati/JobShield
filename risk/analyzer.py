@@ -1,69 +1,56 @@
-import re
+import json
 
-RISK_PATTERNS = {
-    "upfront_payment": [
-        r"pay.*fee",
-        r"registration fee",
-        r"processing fee",
-        r"security deposit",
-        r"pay.*deposit",
-    ],
-    "financial_information": [
-        r"bank account",
-        r"bank details",
-        r"credit card",
-        r"debit card",
-        r"upi",
-    ],
-    "sensitive_personal_information": [
-        r"aadhaar",
-        r"pan card",
-        r"passport",
-        r"otp",
-    ],
-    "unrealistic_promises": [
-        r"guaranteed.*job",
-        r"guaranteed.*income",
-        r"earn.*per day",
-        r"earn.*per month",
-        r"no experience.*high salary",
-    ],
-}
+from groq import Groq
 
-RISK_DESCRIPTIONS = {
-    "upfront_payment": "The job appears to request an upfront payment or deposit.",
-    "financial_information": "The job appears to request sensitive financial information.",
-    "sensitive_personal_information": "The job appears to request sensitive personal information.",
-    "unrealistic_promises": "The job contains potentially unrealistic income or employment promises.",
-}
-
-def detect_risk_signals(job) -> list:
-    text = f"{job.title} {job.company} {job.description}".lower()
-
-    signals = []
-
-    for category, patterns in RISK_PATTERNS.items():
-        for pattern in patterns:
-            if re.search(pattern, text):
-                signals.append(category)
-                break
-
-    return signals
+MODEL = "openai/gpt-oss-20b"
+RISK_THRESHOLD = 70
 
 
-def assess_risk(job) -> dict:
-    signals = detect_risk_signals(job)
+def assess_risk(
+    job_text: str,
+    client: Groq,
+) -> dict:
 
-    if len(signals) >= 3:
-        risk_level = "high"
-    elif len(signals) >= 1:
-        risk_level = "medium"
-    else:
-        risk_level = "low"
+    prompt = f"""
+Analyze this job description for potential job-scam or safety risk signals.
 
-    return {
-        "risk_level": risk_level,
-        "risk_signals": signals,
-        "risk_explanations": [RISK_DESCRIPTIONS[signal] for signal in signals],
-        "signal_count": len(signals),
-    }
+Return ONLY valid JSON:
+
+{{
+    "risk_score": 0,
+    "risk_level": "low",
+    "signals": [],
+    "explanations": [],
+    "requires_confirmation": false
+}}
+
+Rules:
+- Score from 0 to 100.
+- This is a risk signal score, NOT scam probability.
+- 0-29 = low.
+- 30-69 = medium.
+- 70-100 = high.
+- Consider upfront payments, deposits, requests for financial information,
+  sensitive identity information, OTPs, unrealistic income promises,
+  guaranteed employment, and other suspicious recruitment patterns.
+- Do not claim the job is definitely a scam.
+- Keep explanations concise.
+- requires_confirmation must be true when score >= 70.
+
+JOB DESCRIPTION:
+{job_text}
+"""
+
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+
+    return json.loads(response.choices[0].message.content)
