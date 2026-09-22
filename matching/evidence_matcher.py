@@ -4,7 +4,6 @@ from matching.semantic_matcher import calculate_similarity
 def normalize_text(text: str) -> str:
     return text.strip().lower()
 
-
 def get_allowed_evidence_types(requirement_type: str) -> set[str]:
     if requirement_type == "skill":
         return {
