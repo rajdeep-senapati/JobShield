@@ -194,3 +194,6 @@ data/resume_profile.json
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Local project revision guide
+docs/JobShield_Project_Guide.pdf
