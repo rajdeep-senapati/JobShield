@@ -9,10 +9,13 @@ from resume.parser import extract_resume_text
 from resume.cleaner import clean_resume_text
 from analysis.analyzer import analyze_risk, analyze_reasoning
 
+# --------------------------------------------------
+# SETUP
+# --------------------------------------------------
+
 load_dotenv()
 
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
 
 st.set_page_config(
     page_title="JobShield",
@@ -20,6 +23,28 @@ st.set_page_config(
     layout="wide",
 )
 
+
+# --------------------------------------------------
+# SESSION STATE
+# --------------------------------------------------
+
+defaults = {
+    "resume_text": None,
+    "job_text": None,
+    "risk_result": None,
+    "reasoning": None,
+    "risk_confirmed": False,
+    "analysis_started": False,
+}
+
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+# --------------------------------------------------
+# HEADER
+# --------------------------------------------------
 
 st.title("🛡️ JobShield")
 st.subheader("AI Job Discovery & Safety Assistant")
@@ -29,18 +54,20 @@ st.markdown("**Find → Verify → Match → Improve**")
 st.divider()
 
 
+# --------------------------------------------------
+# INPUTS
+# --------------------------------------------------
+
 uploaded_resume = st.file_uploader(
     "📄 Upload your resume",
     type=["pdf", "docx"],
 )
-
 
 job_text = st.text_area(
     "💼 Paste Job Description",
     height=300,
     placeholder="Paste the complete job description here...",
 )
-
 
 risk_enabled = st.toggle(
     "🛡️ Enable Risk Analysis",
@@ -49,12 +76,25 @@ risk_enabled = st.toggle(
 )
 
 
+# --------------------------------------------------
+# ANALYZE BUTTON
+# --------------------------------------------------
+
 if st.button(
     "🔍 Analyze Job",
     use_container_width=True,
     type="primary",
 ):
 
+    # Reset previous analysis
+    st.session_state.resume_text = None
+    st.session_state.job_text = None
+    st.session_state.risk_result = None
+    st.session_state.reasoning = None
+    st.session_state.risk_confirmed = False
+    st.session_state.analysis_started = False
+
+    # Validate inputs
     if not uploaded_resume:
         st.warning("Please upload your resume first.")
         st.stop()
@@ -62,6 +102,9 @@ if st.button(
     if not job_text.strip():
         st.warning("Please paste a job description first.")
         st.stop()
+
+    # Save inputs in session state
+    st.session_state.job_text = job_text
 
     # --------------------------------------------------
     # RESUME PROCESSING
@@ -86,11 +129,15 @@ if st.button(
             resume_path = temp_file.name
 
         try:
+
             resume_text = extract_resume_text(resume_path)
 
             cleaned_resume_text = clean_resume_text(resume_text)
 
+            st.session_state.resume_text = cleaned_resume_text
+
         finally:
+
             if os.path.exists(resume_path):
                 os.remove(resume_path)
 
@@ -108,6 +155,8 @@ if st.button(
                 client,
             )
 
+            st.session_state.risk_result = risk_result
+
             status.update(
                 label="🛡️ Risk analysis complete",
                 state="complete",
@@ -116,7 +165,7 @@ if st.button(
 
         else:
 
-            risk_result = {"risk_analysis_enabled": False}
+            st.session_state.risk_result = {"risk_analysis_enabled": False}
 
             status.update(
                 label="⏭️ Risk analysis skipped",
@@ -124,33 +173,71 @@ if st.button(
                 expanded=False,
             )
 
-    # --------------------------------------------------
-    # HIGH-RISK GATE
-    # --------------------------------------------------
+    st.session_state.analysis_started = True
 
-    if risk_enabled and risk_result["risk_score"] >= 70:
+    # Force Streamlit to rerun so the risk gate
+    # can use the persisted session state.
+    st.rerun()
 
-        risk = risk_result
 
-        st.error(f"⚠️ High Risk Signal Score: " f"{risk['risk_score']}/100")
+# --------------------------------------------------
+# STOP IF NO ANALYSIS EXISTS
+# --------------------------------------------------
 
-        for explanation in risk["explanations"]:
-            st.warning(explanation)
+if not st.session_state.analysis_started:
+    st.stop()
 
-        st.warning("Review these signals before continuing.")
 
-        continue_analysis = st.button(
-            "Continue to Job Matching",
-            key="continue_risk",
-            type="primary",
-        )
+# --------------------------------------------------
+# LOAD SESSION DATA
+# --------------------------------------------------
 
-        if not continue_analysis:
-            st.stop()
+resume_text = st.session_state.resume_text
+saved_job_text = st.session_state.job_text
+risk_result = st.session_state.risk_result
 
-    # --------------------------------------------------
-    # 120B REASONING
-    # --------------------------------------------------
+
+# --------------------------------------------------
+# HIGH-RISK GATE
+# --------------------------------------------------
+
+if (
+    risk_enabled
+    and risk_result
+    and risk_result.get("risk_score", 0) >= 70
+    and not st.session_state.risk_confirmed
+):
+
+    st.divider()
+
+    st.header("🛡️ Job Safety Check")
+
+    st.error(f"⚠️ High Risk Signal Score: " f"{risk_result['risk_score']}/100")
+
+    for explanation in risk_result.get("explanations", []):
+        st.warning(explanation)
+
+    st.warning("Review these signals before continuing.")
+
+    if st.button(
+        "Continue to Job Matching",
+        key="continue_risk",
+        type="primary",
+        use_container_width=True,
+    ):
+
+        st.session_state.risk_confirmed = True
+
+        st.rerun()
+
+    st.stop()
+
+
+# --------------------------------------------------
+# 120B REASONING
+# --------------------------------------------------
+
+if st.session_state.reasoning is None and resume_text and saved_job_text:
 
     with st.status(
         "🤖 Running AI job matching...",
@@ -160,11 +247,13 @@ if st.button(
         st.write("🧠 Analyzing resume against job requirements...")
 
         reasoning = analyze_reasoning(
-            cleaned_resume_text,
-            job_text,
+            resume_text,
+            saved_job_text,
             risk_result,
             client,
         )
+
+        st.session_state.reasoning = reasoning
 
         status.update(
             label="✅ Analysis complete!",
@@ -172,83 +261,101 @@ if st.button(
             expanded=False,
         )
 
-    # --------------------------------------------------
-    # RISK RESULT
-    # --------------------------------------------------
 
-    st.divider()
+# --------------------------------------------------
+# GET REASONING
+# --------------------------------------------------
 
-    st.header("🛡️ Job Risk Analysis")
+reasoning = st.session_state.reasoning
 
-    if risk_enabled:
+if reasoning is None:
+    st.stop()
 
-        st.metric(
-            "Risk Score",
-            f"{risk_result['risk_score']}/100",
-        )
 
-        st.caption("Risk signal score based on detected indicators.")
+# --------------------------------------------------
+# RISK RESULT
+# --------------------------------------------------
 
-        if risk_result["signals"]:
+st.divider()
 
-            for explanation in risk_result["explanations"]:
-                st.warning(explanation)
+st.header("🛡️ Job Risk Analysis")
 
-        else:
+if risk_enabled:
 
-            st.success("No significant risk signals were detected.")
+    st.metric(
+        "Risk Score",
+        f"{risk_result['risk_score']}/100",
+    )
+
+    st.caption("Risk signal score based on detected indicators.")
+
+    if risk_result.get("signals"):
+
+        for explanation in risk_result.get("explanations", []):
+            st.warning(explanation)
 
     else:
 
-        st.info("Risk analysis was disabled.")
+        st.success("No significant risk signals were detected.")
 
-    # --------------------------------------------------
-    # JOB MATCH
-    # --------------------------------------------------
+else:
 
-    st.divider()
+    st.info("Risk analysis was disabled.")
 
-    st.header("🎯 Job Match")
 
-    st.metric(
-        "Match Score",
-        f"{reasoning['match_score']}/100",
-    )
+# --------------------------------------------------
+# JOB MATCH
+# --------------------------------------------------
 
-    st.write(reasoning["match_summary"])
+st.divider()
 
-    with st.expander("💪 Strengths"):
+st.header("🎯 Job Match")
 
-        for item in reasoning["strengths"]:
+st.metric(
+    "Match Score",
+    f"{reasoning['match_score']}/100",
+)
 
-            st.markdown(f"**{item['point']}**")
+st.write(reasoning["match_summary"])
 
-            st.caption(item["evidence"])
 
-    with st.expander("⚠️ Gaps"):
+with st.expander("💪 Strengths"):
 
-        for item in reasoning["gaps"]:
+    for item in reasoning["strengths"]:
 
-            st.markdown(f"**{item['point']}**")
+        st.markdown(f"**{item['point']}**")
 
-            st.caption(f"Job requirement: " f"{item['job_requirement']}")
+        st.caption(item["evidence"])
 
-    with st.expander("🔎 Why This Matches"):
 
-        for item in reasoning["why_this_matches"]:
+with st.expander("⚠️ Gaps"):
 
-            st.write(f"• {item}")
+    for item in reasoning["gaps"]:
 
-    with st.expander("📄 Resume Improvements"):
+        st.markdown(f"**{item['point']}**")
 
-        for item in reasoning["resume_improvements"]:
+        st.caption(f"Job requirement: " f"{item['job_requirement']}")
 
-            st.write(f"• {item}")
 
-    with st.expander("💡 Things to Consider"):
+with st.expander("🔎 Why This Matches"):
 
-        for item in reasoning["things_to_consider"]:
+    for item in reasoning["why_this_matches"]:
 
-            st.write(f"• {item}")
+        st.write(f"• {item}")
 
-    st.caption(f"Reasoning model: {reasoning['_model']}")
+
+with st.expander("📄 Resume Improvements"):
+
+    for item in reasoning["resume_improvements"]:
+
+        st.write(f"• {item}")
+
+
+with st.expander("💡 Things to Consider"):
+
+    for item in reasoning["things_to_consider"]:
+
+        st.write(f"• {item}")
+
+
+st.caption(f"Reasoning model: {reasoning['_model']}")
