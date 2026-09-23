@@ -7,7 +7,7 @@ from groq import Groq
 
 from resume.parser import extract_resume_text
 from resume.cleaner import clean_resume_text
-from analysis.analyzer import analyze_job
+from analysis.analyzer import analyze_risk, analyze_reasoning
 
 load_dotenv()
 
@@ -64,15 +64,14 @@ if st.button(
         st.stop()
 
     # --------------------------------------------------
-    # ANALYSIS PIPELINE
+    # RESUME PROCESSING
     # --------------------------------------------------
 
     with st.status(
-        "🔄 Analyzing job...",
+        "🔄 Preparing analysis...",
         expanded=True,
     ) as status:
 
-        # Resume processing
         st.write("📄 Processing resume...")
 
         suffix = os.path.splitext(uploaded_resume.name)[1]
@@ -95,44 +94,50 @@ if st.button(
             if os.path.exists(resume_path):
                 os.remove(resume_path)
 
-        # Risk analysis status
+        # --------------------------------------------------
+        # RISK ANALYSIS
+        # --------------------------------------------------
+
         if risk_enabled:
 
             st.write("🛡️ Checking job safety...")
             st.write("🔍 Running risk analysis...")
 
+            risk_result = analyze_risk(
+                job_text,
+                client,
+            )
+
+            status.update(
+                label="🛡️ Risk analysis complete",
+                state="complete",
+                expanded=False,
+            )
+
         else:
 
-            st.write("⏭️ Risk analysis skipped.")
+            risk_result = {"risk_analysis_enabled": False}
 
-        # Main AI analysis
-        st.write("🤖 Running AI job matching...")
-
-        result = analyze_job(
-            cleaned_resume_text,
-            job_text,
-            client,
-            risk_enabled,
-        )
-
-        status.update(
-            label="✅ Analysis complete!",
-            state="complete",
-            expanded=False,
-        )
+            status.update(
+                label="⏭️ Risk analysis skipped",
+                state="complete",
+                expanded=False,
+            )
 
     # --------------------------------------------------
     # HIGH-RISK GATE
     # --------------------------------------------------
 
-    if risk_enabled and result["risk"]["risk_score"] >= 70:
+    if risk_enabled and risk_result["risk_score"] >= 70:
 
-        risk = result["risk"]
+        risk = risk_result
 
         st.error(f"⚠️ High Risk Signal Score: " f"{risk['risk_score']}/100")
 
         for explanation in risk["explanations"]:
             st.warning(explanation)
+
+        st.warning("Review these signals before continuing.")
 
         continue_analysis = st.button(
             "Continue to Job Matching",
@@ -144,27 +149,49 @@ if st.button(
             st.stop()
 
     # --------------------------------------------------
-    # RISK ANALYSIS RESULT
+    # 120B REASONING
+    # --------------------------------------------------
+
+    with st.status(
+        "🤖 Running AI job matching...",
+        expanded=True,
+    ) as status:
+
+        st.write("🧠 Analyzing resume against job requirements...")
+
+        reasoning = analyze_reasoning(
+            cleaned_resume_text,
+            job_text,
+            risk_result,
+            client,
+        )
+
+        status.update(
+            label="✅ Analysis complete!",
+            state="complete",
+            expanded=False,
+        )
+
+    # --------------------------------------------------
+    # RISK RESULT
     # --------------------------------------------------
 
     st.divider()
 
+    st.header("🛡️ Job Risk Analysis")
+
     if risk_enabled:
-
-        st.header("🛡️ Job Risk Analysis")
-
-        risk = result["risk"]
 
         st.metric(
             "Risk Score",
-            f"{risk['risk_score']}/100",
+            f"{risk_result['risk_score']}/100",
         )
 
         st.caption("Risk signal score based on detected indicators.")
 
-        if risk["signals"]:
+        if risk_result["signals"]:
 
-            for explanation in risk["explanations"]:
+            for explanation in risk_result["explanations"]:
                 st.warning(explanation)
 
         else:
@@ -173,8 +200,6 @@ if st.button(
 
     else:
 
-        st.header("🛡️ Job Risk Analysis")
-
         st.info("Risk analysis was disabled.")
 
     # --------------------------------------------------
@@ -182,8 +207,6 @@ if st.button(
     # --------------------------------------------------
 
     st.divider()
-
-    reasoning = result["reasoning"]
 
     st.header("🎯 Job Match")
 
