@@ -1,436 +1,338 @@
-# 🛡️ JobShield
+# 🛡️ JobShield v2.0
 
-### AI Job Discovery & Safety Assistant
+### Agentic Job Verification & Hybrid-RAG Career Copilot
 
-> **Find → Verify → Match → Improve**
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-1C3C3C?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph)
+[![Groq](https://img.shields.io/badge/Inference-Groq-F55036)](https://groq.com/)
+[![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Pydantic](https://img.shields.io/badge/Validation-Pydantic-E92063)](https://docs.pydantic.dev/)
 
-JobShield is an AI-powered job analysis assistant that helps candidates evaluate job descriptions for potential safety risks and understand how well their resume matches legitimate job requirements.
+> **Company Web Check → Hybrid Resume Retrieval → Structured Job Match → Grounded Critic**
 
-Instead of treating every job posting as trustworthy, JobShield separates **job safety analysis** from **candidate-job matching** so that suspicious recruitment signals don't distort the actual qualification match.
+JobShield is an AI-powered job verification and resume-matching application. It combines job-risk analysis, live company web search, hybrid retrieval over resume content, structured LLM reasoning, and a critic/refinement pass in a LangGraph workflow.
 
----
-
-## 🚀 What JobShield Does
-
-JobShield follows a simple four-stage workflow:
-
-**Find → Verify → Match → Improve**
-
-```text
-                    ┌─────────────────┐
-                    │   Your Resume   │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ Resume Parsing  │
-                    │  & Cleaning    │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │  Job Description │
-                    └────────┬────────┘
-                             │
-                  ┌──────────┴──────────┐
-                  ▼                     ▼
-          ┌───────────────┐     ┌───────────────┐
-          │ Risk Analysis │     │ Job Matching  │
-          │   20B Model   │     │   120B Model  │
-          └───────┬───────┘     └───────┬───────┘
-                  │                     │
-                  ▼                     ▼
-          Risk Signal Score       Match Score
-                  │                     │
-                  └──────────┬──────────┘
-                             ▼
-                    ┌─────────────────┐
-                    │ Explain Results │
-                    │ & Improvements  │
-                    └─────────────────┘
-```
+The goal is to help candidates investigate suspicious recruitment signals and understand how their documented experience relates to a job description—without treating safety concerns as qualifications or inventing candidate experience.
 
 ---
 
 ## ✨ Features
 
-### 🛡️ Job Risk Analysis
+### 🛡️ Job risk analysis and confirmation
 
-Detects potentially suspicious recruitment patterns such as:
+- Analyzes job descriptions for suspicious recruitment signals such as upfront fees, deposits, requests for sensitive identity or financial information, OTP requests, and unrealistic guarantees.
+- Produces a **risk signal score from 0–100**. This is not a probability that a job is fraudulent.
+- Derives the risk level and high-risk confirmation requirement deterministically from the validated score.
+- Pauses the matching workflow when confirmation is required, allowing the user to review the explanations before continuing.
 
-* Upfront registration fees
-* Security deposits
-* Requests for sensitive identity information
-* Requests for financial information
-* OTP requests
-* Unrealistic guaranteed income
-* Other suspicious recruitment signals
+Risk analysis is a signal-detection aid, not proof that an employer or vacancy is fraudulent.
 
-The result is presented as a **risk signal score from 0–100**, not as a probability that a job is a scam.
+### 🌐 Company web verification
 
-High-risk results trigger an additional confirmation step before the AI performs the detailed job matching.
+- Accepts an optional company name.
+- Uses DuckDuckGo search results to gather a small set of public company, careers, and review references.
+- Passes the retrieved snippets and job context to an LLM verification node for a concise summary.
+- Displays the verification summary and execution trace in the Streamlit interface.
 
----
+Web search coverage is limited and results can be incomplete or outdated. It does not independently certify a company's legitimacy.
 
-### 🎯 AI Job Matching
+### 🔎 Hybrid RAG resume matching
 
-JobShield compares the resume against the legitimate requirements of the job.
+The matcher retrieves relevant resume sections before generating the job-fit analysis:
 
-It provides:
+1. Splits the cleaned resume into paragraph-sized chunks.
+2. Ranks chunks lexically using **BM25**.
+3. Ranks chunks using **TF-IDF vectors and cosine similarity**.
+4. Combines both rankings using **Reciprocal Rank Fusion (RRF)**.
+5. Supplies the top retrieved chunks to the structured matching model.
 
-* Match score
-* Match summary
-* Strengths
-* Gaps
-* Requirement-to-resume connections
-* Resume improvement suggestions
-* Additional considerations
+This is a lightweight hybrid retrieval pipeline; the cosine retrieval uses TF-IDF rather than a neural embedding model.
 
-The matching system is designed to avoid treating safety-related requests such as fees, deposits, OTPs, or sensitive personal information as job qualifications.
+### 🎯 Structured, evidence-oriented matching
 
----
+The matching output includes:
 
-### 📄 Resume Processing
+- Match score and summary
+- Strengths with resume evidence
+- Gaps tied to job requirements
+- Requirement-to-resume explanations
+- Resume improvement suggestions
+- Additional considerations
 
-Supports:
+Pydantic structured output constrains the response shape. The prompts instruct the model to use explicit resume evidence, avoid invented skills or metrics, and keep safety-related requests separate from qualification matching.
 
-* PDF resumes
-* DOCX resumes
+### 🧪 Grounding critic
 
-The resume is processed using Python before being passed to the reasoning model.
+A third LangGraph node reviews draft resume-improvement suggestions against the retrieved resume chunks and refines them. This is an additional grounding pass, not a mathematical guarantee of zero hallucinations; users should review generated suggestions before using them.
 
-The pipeline includes:
+### 📊 Execution trace and telemetry
 
-```text
-Resume
-   ↓
-Text Extraction
-   ↓
-Text Cleaning
-   ↓
-Clean Resume Representation
-```
+The Streamlit interface surfaces:
 
-No LLM is required for the initial resume extraction and cleaning stage.
+- Pipeline token telemetry
+- An estimated context-reduction percentage
+- An estimated run-cost figure
+- Per-node execution trace and latency
+- Company web-verification summary
+- Retrieved resume chunks
 
----
+**Telemetry caveat:** token counts can include estimates when provider usage metadata is unavailable. The context-reduction figure is calculated from text length, not an exact tokenizer measurement. The displayed cost is an estimate based on the implementation's simplified rate assumption, not a billing quote from Groq.
 
-### 🤖 Two-Stage AI Architecture
+### ⚡ Model selection and caching
 
-JobShield uses different models for different responsibilities.
-
-**Risk Analysis**
-
-```text
-openai/gpt-oss-20b
-```
-
-Used specifically for identifying job safety/risk signals.
-
-**Job Reasoning**
-
-```text
-openai/gpt-oss-120b
-```
-
-Used for deeper resume-to-job reasoning and evidence-based matching.
-
-This separation prevents safety concerns from becoming part of the candidate's qualification score.
+- Queries the Groq models endpoint to select from configured fast and stronger model candidates, with fallback candidates if the lookup is unavailable.
+- Uses a Streamlit data cache for repeated pipeline calls with identical inputs.
+- Uses structured output for the main matching response.
 
 ---
 
-## 🧠 Matching Philosophy
+## 🏗️ System Architecture
 
-JobShield follows several grounding principles:
+The application runs a sequential three-node LangGraph workflow after resume parsing and the optional risk-confirmation gate.
 
-* Match only against legitimate job requirements.
-* Use information explicitly present in the resume.
-* Do not invent candidate skills or experience.
-* Do not infer experience simply from a technology name or job title.
-* Every strength should have supporting resume evidence.
-* Every gap should correspond to an explicit job requirement.
-* Safety-related requests should not affect the match score.
-* Resume improvements should focus on presenting or clarifying existing evidence.
-* The system provides decision support rather than making the final application decision for the user.
+~~~mermaid
+flowchart TD
+    A[Streamlit UI] --> B[Resume PDF / DOCX]
+    B --> C[Text Extraction & Cleaning]
+    A --> D[Job Description + Company Name]
+    D --> E[Job Risk Analysis]
+    C --> F{High-risk confirmation required?}
+    E --> F
+    F -->|Yes| G[User Reviews & Confirms]
+    F -->|No / Confirmed| H[LangGraph Workflow]
+    G --> H
+    H --> I[Agent 1: Company Web Verifier]
+    I --> J[Agent 2: Hybrid RAG Matcher]
+    J --> K[Agent 3: Grounding Critic]
+    K --> L[Pydantic-shaped Match Output]
+    L --> M[Results, Trace & Telemetry]
+~~~
 
----
+### The three LangGraph nodes
 
-## 🔬 Example: High-Risk Job
+| Node | Responsibility | Implementation |
+|---|---|---|
+| **Agent 1 — Web Verifier** | Gather public company references and summarize them with job/risk context | DuckDuckGo Search (ddgs) + Groq chat model |
+| **Agent 2 — Hybrid RAG Matcher** | Retrieve relevant resume chunks and generate structured job matching | BM25 + TF-IDF cosine similarity + RRF + Pydantic |
+| **Agent 3 — Grounding Critic** | Review and refine resume-improvement suggestions against retrieved evidence | Groq chat model + retrieved resume chunks |
 
-Example job description containing:
-
-```text
-₹2,000 registration fee
-Security deposit
-Aadhaar and PAN details
-Bank account information
-OTP verification
-₹5,000/day guaranteed income
-No experience required
-```
-
-JobShield identified:
-
-```text
-Risk Score: 90/100
-```
-
-The system then displayed the detected risk signals and required confirmation before continuing to detailed job matching.
-
-Because the posting contained no meaningful legitimate qualifications to compare against the resume, the resulting:
-
-```text
-Match Score: 0/100
-```
-
-This demonstrates the separation between **job safety** and **candidate qualification matching**.
+The graph is sequential: Web Verifier → Hybrid RAG Matcher → Grounding Critic.
 
 ---
 
-## 📊 Example: Legitimate Data Analyst Job
+## 🧠 Engineering Decisions
 
-For a normal Data Analyst role, JobShield can identify legitimate matches such as:
-
-```text
-Resume Evidence
-      ↓
-Python
-SQL
-Power BI
-Data Analysis
-Azure
-Dashboards
-      ↓
-Job Requirements
-      ↓
-Evidence-Based Match
-```
-
-Example output:
-
-```text
-Risk Score: 0/100
-
-Match Score: 75/100
-```
-
-The system can then identify both relevant strengths and explicit requirements where the resume lacks direct evidence.
+| Engineering concern | JobShield approach |
+|---|---|
+| Separate safety from qualification fit | Risk analysis and resume matching are separate stages; safety signals are not intended to affect the match score |
+| Reduce irrelevant resume context | Hybrid retrieval selects a small set of relevant resume chunks |
+| Combine lexical and vector-style retrieval | BM25 and TF-IDF cosine rankings are fused with RRF |
+| Constrain model responses | Pydantic schemas define the expected structured matching output |
+| Reduce unsupported resume edits | A critic node reviews improvement suggestions against retrieved resume text |
+| Handle model availability | Runtime model discovery and fallback candidates are used |
+| Avoid repeated pipeline work | Streamlit caching reuses results for identical cached inputs |
+| Make execution easier to inspect | The UI exposes node traces, retrieved chunks, and approximate telemetry |
 
 ---
 
-## 🏗️ Project Architecture
+## 📂 Project Structure
 
-```text
+~~~text
 JobShield/
-│
-├── app.py
-│
+├── app.py                  # Streamlit UI, session state, risk gate, cache and telemetry
+├── agent_pipeline.py       # LangGraph workflow, hybrid retrieval, model selection and critic
 ├── ai/
-│   ├── reasoner.py
-│   ├── router.py
-│   └── __init__.py
-│
+│   ├── reasoner.py         # Structured reasoning response parsing and validation
+│   └── router.py           # Primary/fallback Groq model routing
 ├── analysis/
-│   ├── analyzer.py
-│   └── __init__.py
-│
-├── job/
-│   ├── loader.py
-│   ├── schema.py
-│   └── __init__.py
-│
-├── resume/
-│   ├── parser.py
-│   ├── cleaner.py
-│   ├── profile.py
-│   └── __init__.py
-│
+│   └── analyzer.py         # Risk-analysis integration and reasoning filters
 ├── risk/
-│   ├── analyzer.py
-│   └── __init__.py
-│
-└── data/
-    └── ...
-```
+│   └── analyzer.py         # Risk score generation and deterministic risk classification
+├── resume/
+│   ├── parser.py           # PDF and DOCX text extraction
+│   └── cleaner.py          # Resume text normalization
+├── job/
+│   ├── loader.py           # Job data loading
+│   └── schema.py           # Job data model
+├── data/                   # Project data
+├── requirements.txt        # Python dependencies
+└── README.md
+~~~
 
 ---
 
 ## 🛠️ Tech Stack
 
-### AI / LLM
-
-* Groq
-* `openai/gpt-oss-20b`
-* `openai/gpt-oss-120b`
-
-### Backend
-
-* Python
-
-### AI Application
-
-* Streamlit
-
-### Resume Processing
-
-* PyPDF
-* python-docx
-* Python-based text cleaning
-
-### Environment & Configuration
-
-* python-dotenv
+- **Language:** Python
+- **Orchestration:** LangGraph
+- **LLM inference:** Groq, LangChain-Groq
+- **Models:** Runtime-selected Groq chat models (candidate list configured in agent_pipeline.py)
+- **Structured validation:** Pydantic
+- **Retrieval:** rank-bm25, scikit-learn TF-IDF, cosine similarity, NumPy
+- **Web search:** DuckDuckGo Search (ddgs)
+- **UI:** Streamlit
+- **Resume parsing:** pypdf, python-docx
+- **Configuration:** python-dotenv
 
 ---
 
-## ⚙️ Installation
+## 🚀 Quickstart
 
-Clone the repository:
+### 1. Clone the repository
 
-```bash
+~~~bash
 git clone https://github.com/rajdeep-senapati/JobShield.git
 cd JobShield
-```
+~~~
 
-Create a virtual environment:
+### 2. Create and activate a virtual environment
 
-### Windows PowerShell
+**Windows PowerShell**
 
-```powershell
+~~~powershell
 python -m venv .jobshield-env
 .\.jobshield-env\Scripts\Activate.ps1
-```
+~~~
 
-Install dependencies:
+**macOS / Linux**
 
-```bash
+~~~bash
+python -m venv .jobshield-env
+source .jobshield-env/bin/activate
+~~~
+
+### 3. Install dependencies
+
+~~~bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-```
+~~~
 
----
+### 4. Configure the Groq API key
 
-## 🔑 Environment Variables
+Create a .env file in the repository root:
 
-Create a `.env` file in the project root:
-
-```env
+~~~env
 GROQ_API_KEY=your_groq_api_key
-```
+~~~
 
-Do not commit your API key to GitHub.
+Never commit your API key. The repository's .gitignore excludes local environment files and Streamlit secrets.
 
-Make sure `.env` is included in `.gitignore`.
+### 5. Run JobShield
 
----
-
-## ▶️ Run Locally
-
-Start the Streamlit application:
-
-```bash
+~~~bash
 streamlit run app.py
-```
+~~~
 
-Then open the local Streamlit URL shown in the terminal.
+Open the local URL printed by Streamlit.
 
 ---
 
-## 🧪 Testing
+## ☁️ Deploy on Streamlit Community Cloud
 
-JobShield has been tested with two primary scenarios.
+1. Push the project to GitHub.
+2. Sign in to [Streamlit Community Cloud](https://share.streamlit.io/) with GitHub.
+3. Create an app using this repository, the main branch, and app.py as the entry point.
+4. In the app's **Settings → Secrets**, add:
 
-### High-Risk Job
+~~~toml
+GROQ_API_KEY = "your_groq_api_key"
+~~~
 
-Expected behavior:
+5. Deploy the app.
 
-```text
+Check the current [Streamlit Community Cloud documentation](https://docs.streamlit.io/deploy/streamlit-community-cloud) for availability, resource limits, and deployment settings.
+
+---
+
+## 🧪 Validation Scenarios
+
+Use these scenarios when manually validating a deployment:
+
+### High-risk job description
+
+Use a sample posting containing suspicious requests such as a registration payment, security deposit, OTP, or sensitive financial details.
+
+Expected flow:
+
+~~~text
+Resume + Job Description
+        ↓
 Risk Analysis
-      ↓
-High Risk Signal
-      ↓
-Confirmation Required
-      ↓
-User Confirms
-      ↓
-Job Matching
-```
+        ↓
+High-risk score
+        ↓
+Confirmation screen
+        ↓
+User chooses to continue
+        ↓
+LangGraph matching workflow
+~~~
 
-### Normal Job
+### Standard job description
 
-Expected behavior:
+Use a conventional job description with explicit skills and responsibilities.
 
-```text
+Expected flow:
+
+~~~text
+Resume + Job Description
+        ↓
 Risk Analysis
-      ↓
-Low Risk
-      ↓
-Job Matching
-      ↓
-Strengths + Gaps + Improvements
-```
+        ↓
+Company Web Verification
+        ↓
+Hybrid Resume Retrieval
+        ↓
+Structured Match + Grounding Critic
+        ↓
+Strengths, Gaps & Improvements
+~~~
 
-The system has also been tested for model-generated JSON containing additional text and uses structured parsing to extract the valid JSON response.
-
----
-
-## 🚧 Current Limitations
-
-* Job descriptions are currently provided manually by the user.
-* Job URL verification is not yet implemented.
-* Risk detection identifies signals but does not prove that a job is fraudulent.
-* Matching quality depends on the information available in the resume and job description.
-* The system does not replace independent verification of an employer or job posting.
+The repository should be treated as an actively developed project. Run and verify these scenarios in the target environment; do not interpret example scores as guaranteed outputs.
 
 ---
 
-## 🔮 Future Improvements
+## ⚠️ Limitations
 
-Planned directions include:
-
-* Job URL input and extraction
-* Employer and job-source verification
-* Automated job discovery
-* More robust job-posting validation
-* Resume-to-JD comparison visualizations
-* Job history and saved analyses
-* Improved deployment and production infrastructure
-
----
-
-## 🎯 Design Goal
-
-JobShield is designed around one principle:
-
-> **Help candidates understand a job before they apply.**
-
-The system separates:
-
-**Safety signals** → *Is there anything suspicious to investigate?*
-
-from
-
-**Qualification matching** → *How does the candidate's documented experience relate to the legitimate requirements?*
-
-This keeps the two problems separate and makes the resulting analysis easier to understand.
+- Company verification depends on a limited set of public search results and LLM interpretation; it is not a comprehensive background check.
+- A risk score indicates detected signals, not a definitive scam classification or probability.
+- Hybrid retrieval uses BM25 and TF-IDF cosine similarity, not a neural embedding database.
+- The critic is a second-pass review and cannot guarantee that every generated statement is correct.
+- Telemetry includes estimates where exact provider usage is unavailable; cost is approximate.
+- Matching quality depends on the clarity and completeness of the uploaded resume and job description.
+- Job descriptions are pasted by the user; automated job discovery and full job-page extraction are not currently part of the documented workflow.
+- JobShield is decision support and does not replace independent employer verification or the candidate's judgment.
 
 ---
 
-## 👨‍💻 Author
+## 🔮 Potential Next Steps
+
+- Add automated unit and integration tests for retrieval, schemas, risk gating, and model fallback.
+- Add source citations and stronger evidence checks for web verification.
+- Evaluate retrieval quality with a labelled resume/JD test set.
+- Add robust error handling and retry policies for external search and model calls.
+- Add persistence for saved analyses and user history.
+- Track actual token usage and provider-specific pricing more precisely.
+- Add job URL ingestion and controlled page extraction.
+
+---
+
+## 👤 Author
 
 **Rajdeep Senapati**
 
-B.Tech — Computer Science (Data Science)
-
+B.Tech — Computer Science (Data Science)  
 Heritage Institute of Technology, Kolkata
 
-[GitHub](https://github.com/rajdeep-senapati)
-
-[LinkedIn](https://www.linkedin.com/in/rajdeep-senapati)
+- [GitHub](https://github.com/rajdeep-senapati)
+- [LinkedIn](https://www.linkedin.com/in/rajdeep-senapati)
+- [Portfolio](https://rajdeep-senapati.vercel.app)
 
 ---
 
-## 📌 Status
+## 📌 Project Status
 
-**JobShield MVP — Active Development**
+**JobShield v2.0 — Active Development**
 
-The core risk-analysis, high-risk confirmation, AI job-matching, evidence-based reasoning, and Streamlit interface are implemented.
+The repository contains a Streamlit application with a risk-analysis and confirmation stage, a sequential three-node LangGraph workflow, hybrid resume retrieval, structured job matching, a grounding-critic pass, and execution telemetry.
