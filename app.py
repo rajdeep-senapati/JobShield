@@ -7,7 +7,8 @@ from groq import Groq
 
 from resume.parser import extract_resume_text
 from resume.cleaner import clean_resume_text
-from analysis.analyzer import analyze_risk, analyze_reasoning
+from analysis.analyzer import analyze_risk
+from agent_pipeline import build_jobshield_graph
 
 # --------------------------------------------------
 # SETUP
@@ -36,6 +37,35 @@ st.set_page_config(
     page_icon="🛡️",
     layout="wide",
 )
+
+
+# --------------------------------------------------
+# CACHED MULTI-AGENT RUNNER (Zero-Cost Repeat Runs)
+# --------------------------------------------------
+
+
+@st.cache_data(show_spinner=False)
+def run_cached_agent_pipeline(
+    resume_text: str,
+    job_text: str,
+    company_name: str,
+    risk_result: dict,
+    _api_key: str,
+) -> dict:
+    graph = build_jobshield_graph(_api_key)
+    return graph.invoke(
+        {
+            "resume_text": resume_text,
+            "job_text": job_text,
+            "company_name": company_name,
+            "risk_result": risk_result or {},
+            "web_verification": "",
+            "retrieved_chunks": [],
+            "reasoning": {},
+            "agent_trace": [],
+            "telemetry": {},
+        }
+    )
 
 
 # --------------------------------------------------
@@ -119,8 +149,10 @@ st.markdown(
 defaults = {
     "resume_text": None,
     "job_text": None,
+    "company_name": "",
     "risk_result": None,
     "reasoning": None,
+    "agent_state": None,
     "risk_confirmed": False,
     "analysis_started": False,
     "risk_analysis_enabled": False,
@@ -140,10 +172,10 @@ st.markdown(
     <div class="hero">
         <div class="hero-title">🛡️ JobShield</div>
         <div class="hero-subtitle">
-            AI Job Discovery & Safety Assistant
+            Agentic Job Verification & Hybrid-RAG Career Copilot
         </div>
         <div class="flow">
-            Find → Verify → Match → Improve
+            Web Verify (Tool Use) → Hybrid RAG (BM25 + Cosine) → Match → Grounded Critic
         </div>
     </div>
     """,
@@ -159,19 +191,28 @@ st.divider()
 
 st.subheader("📄 Resume & Job")
 
-uploaded_resume = st.file_uploader(
-    "Upload your resume",
-    type=["pdf", "docx"],
-)
+col_in1, col_in2 = st.columns([2, 1])
+
+with col_in1:
+    uploaded_resume = st.file_uploader(
+        "Upload your resume",
+        type=["pdf", "docx"],
+    )
+
+with col_in2:
+    company_name = st.text_input(
+        "🏢 Company Name (for live web check)",
+        placeholder="e.g., Stripe, Acme Corp...",
+    )
 
 job_text = st.text_area(
     "💼 Paste Job Description",
-    height=280,
+    height=260,
     placeholder="Paste the complete job description here...",
 )
 
 risk_enabled = st.toggle(
-    "🛡️ Enable Risk Analysis",
+    "🛡️ Enable Risk & Web Verification",
     value=True,
     help="Disable this if you have already verified the job and want faster analysis.",
 )
@@ -186,12 +227,13 @@ if st.button(
     use_container_width=True,
     type="primary",
 ):
-
     # Reset previous analysis
     st.session_state.resume_text = None
     st.session_state.job_text = None
+    st.session_state.company_name = company_name
     st.session_state.risk_result = None
     st.session_state.reasoning = None
+    st.session_state.agent_state = None
     st.session_state.risk_confirmed = False
     st.session_state.analysis_started = False
     st.session_state.risk_analysis_enabled = risk_enabled
@@ -215,7 +257,6 @@ if st.button(
         "🔄 Preparing analysis...",
         expanded=True,
     ) as status:
-
         st.write("📄 Processing resume...")
 
         suffix = os.path.splitext(uploaded_resume.name)[1]
@@ -224,33 +265,23 @@ if st.button(
             delete=False,
             suffix=suffix,
         ) as temp_file:
-
             temp_file.write(uploaded_resume.getbuffer())
-
             resume_path = temp_file.name
 
         try:
-
             resume_text = extract_resume_text(resume_path)
-
             cleaned_resume_text = clean_resume_text(resume_text)
-
             st.session_state.resume_text = cleaned_resume_text
-
         finally:
-
             if os.path.exists(resume_path):
                 os.remove(resume_path)
 
         if risk_enabled:
-
-            st.write("🛡️ Checking job safety...")
-
+            st.write("🛡️ Running heuristic job safety scan...")
             risk_result = analyze_risk(
                 job_text,
                 client,
             )
-
             st.session_state.risk_result = risk_result
 
             status.update(
@@ -258,9 +289,7 @@ if st.button(
                 state="complete",
                 expanded=False,
             )
-
         else:
-
             st.session_state.risk_result = {"risk_analysis_enabled": False}
 
             status.update(
@@ -270,7 +299,6 @@ if st.button(
             )
 
     st.session_state.analysis_started = True
-
     st.rerun()
 
 
@@ -288,6 +316,7 @@ if not st.session_state.analysis_started:
 
 resume_text = st.session_state.resume_text
 saved_job_text = st.session_state.job_text
+saved_company = st.session_state.company_name
 risk_result = st.session_state.risk_result
 
 
@@ -301,13 +330,10 @@ if (
     and risk_result.get("requires_confirmation", False)
     and not st.session_state.risk_confirmed
 ):
-
     st.divider()
-
     st.header("🛡️ Job Safety Check")
 
     risk_score = risk_result["risk_score"]
-
     st.error(f"⚠️ High Risk Signal Score: {risk_score}/100")
 
     for explanation in risk_result.get("explanations", []):
@@ -321,7 +347,6 @@ if (
         type="primary",
         use_container_width=True,
     ):
-
         st.session_state.risk_confirmed = True
         st.rerun()
 
@@ -329,42 +354,78 @@ if (
 
 
 # --------------------------------------------------
-# 120B REASONING
+# LANGGRAPH MULTI-AGENT + HYBRID RAG PIPELINE
 # --------------------------------------------------
 
 if st.session_state.reasoning is None and resume_text and saved_job_text:
-
     with st.status(
-        "🤖 Running AI job matching...",
+        "🤖 Executing LangGraph Multi-Agent & Hybrid RAG Pipeline...",
         expanded=True,
     ) as status:
-
-        st.write("🧠 Comparing your resume with the job requirements...")
-
-        reasoning = analyze_reasoning(
-            resume_text,
-            saved_job_text,
-            risk_result,
-            client,
+        st.write("🌐 Agent 1: Verifying company legitimacy via live web search...")
+        st.write(
+            "🔎 Agent 2: Running Hybrid RAG (BM25 + Cosine RRF) retrieval & matching..."
+        )
+        st.write(
+            "🛡️ Agent 3: Grounding Critic verifying zero-hallucination resume edits..."
         )
 
-        st.session_state.reasoning = reasoning
+        agent_state = run_cached_agent_pipeline(
+            resume_text,
+            saved_job_text,
+            saved_company,
+            risk_result,
+            api_key,
+        )
+
+        st.session_state.agent_state = agent_state
+        st.session_state.reasoning = agent_state["reasoning"]
 
         status.update(
-            label="✅ Analysis complete!",
+            label="✅ Multi-Agent Analysis Complete!",
             state="complete",
             expanded=False,
         )
 
 
 # --------------------------------------------------
-# GET REASONING
+# GET REASONING & TELEMETRY
 # --------------------------------------------------
 
 reasoning = st.session_state.reasoning
+agent_state = st.session_state.agent_state or {}
+telemetry = agent_state.get("telemetry", {})
 
 if reasoning is None:
     st.stop()
+
+
+# --------------------------------------------------
+# TELEMETRY & AGENT EXECUTION TRACE BANNER
+# --------------------------------------------------
+
+st.divider()
+
+t_col1, t_col2, t_col3 = st.columns(3)
+t_col1.metric("Total Pipeline Tokens", f"{telemetry.get('tokens', 0):,}")
+t_col2.metric("Hybrid RAG Context Saved", f"{telemetry.get('token_savings_pct', 0)}%")
+t_col3.metric("Est. Run Cost", f"${telemetry.get('est_cost_usd', 0.0004)}")
+
+with st.expander("⚙️ View LangGraph Agent Execution Trace & Retrieved RAG Chunks"):
+    for step in agent_state.get("agent_trace", []):
+        st.markdown(step)
+
+    if agent_state.get("web_verification"):
+        st.markdown("**Live Web Verification Summary:**")
+        st.info(agent_state["web_verification"])
+
+    chunks = agent_state.get("retrieved_chunks", [])
+    if chunks:
+        st.markdown(
+            f"**Top {len(chunks)} Resume Chunks Retrieved (BM25 + Cosine RRF):**"
+        )
+        for idx, chunk in enumerate(chunks, 1):
+            st.code(chunk, language="text")
 
 
 # --------------------------------------------------
@@ -379,42 +440,31 @@ st.markdown(
 )
 
 if st.session_state.risk_analysis_enabled:
-
     risk_score = risk_result.get("risk_score", 0)
-
     col1, col2 = st.columns([1, 3])
 
     with col1:
-
         st.markdown(
             '<div class="score-label">Risk Score</div>',
             unsafe_allow_html=True,
         )
-
         st.markdown(
             f'<div class="score-value">{risk_score}/100</div>',
             unsafe_allow_html=True,
         )
 
     with col2:
-
         st.progress(risk_score / 100)
-
-        st.caption("Risk signal score based on detected indicators.")
+        st.caption("Risk signal score based on heuristic indicators & live web check.")
 
     explanations = risk_result.get("explanations", [])
 
     if explanations:
-
         for explanation in explanations:
             st.warning(f"• {explanation}")
-
     else:
-
         st.success("✓ No significant risk signals were detected.")
-
 else:
-
     st.info("Risk analysis was disabled for this analysis.")
 
 
@@ -429,31 +479,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-match_score = reasoning.get(
-    "match_score",
-    0,
-)
-
+match_score = reasoning.get("match_score", 0)
 col1, col2 = st.columns([1, 3])
 
 with col1:
-
     st.markdown(
         '<div class="score-label">Match Score</div>',
         unsafe_allow_html=True,
     )
-
     st.markdown(
         f'<div class="score-value">{match_score}/100</div>',
         unsafe_allow_html=True,
     )
 
 with col2:
-
     st.progress(match_score / 100)
-
-    st.caption("Based only on legitimate job requirements and resume evidence.")
-
+    st.caption(
+        "Based only on legitimate job requirements and retrieved resume evidence."
+    )
 
 st.info(
     reasoning.get(
@@ -471,27 +514,17 @@ with st.expander(
     "💪 Strengths",
     expanded=True,
 ):
-
-    strengths = reasoning.get(
-        "strengths",
-        [],
-    )
+    strengths = reasoning.get("strengths", [])
 
     if strengths:
-
         for item in strengths:
-
             st.markdown(f"**✓ {item['point']}**")
-
             st.markdown(
-                f'<div class="evidence">' f'{item["evidence"]}' f"</div>",
+                f'<div class="evidence">{item["evidence"]}</div>',
                 unsafe_allow_html=True,
             )
-
             st.divider()
-
     else:
-
         st.markdown(
             '<div class="empty-state">'
             "No direct strengths were identified for this role."
@@ -508,29 +541,19 @@ with st.expander(
     "⚠️ Gaps",
     expanded=True,
 ):
-
-    gaps = reasoning.get(
-        "gaps",
-        [],
-    )
+    gaps = reasoning.get("gaps", [])
 
     if gaps:
-
         for item in gaps:
-
             st.markdown(f"**⚠ {item['point']}**")
-
             st.markdown(
                 f'<div class="evidence">'
                 f'Job requirement: {item["job_requirement"]}'
                 f"</div>",
                 unsafe_allow_html=True,
             )
-
             st.divider()
-
     else:
-
         st.markdown(
             '<div class="empty-state">'
             "No significant legitimate gaps were identified."
@@ -543,22 +566,13 @@ with st.expander(
 # WHY THIS MATCHES
 # --------------------------------------------------
 
-with st.expander(
-    "🔎 Why This Matches",
-):
-
-    matches = reasoning.get(
-        "why_this_matches",
-        [],
-    )
+with st.expander("🔎 Why This Matches"):
+    matches = reasoning.get("why_this_matches", [])
 
     if matches:
-
         for item in matches:
             st.markdown(f"• {item}")
-
     else:
-
         st.markdown(
             '<div class="empty-state">'
             "No direct requirement-to-resume connections were identified."
@@ -571,22 +585,13 @@ with st.expander(
 # RESUME IMPROVEMENTS
 # --------------------------------------------------
 
-with st.expander(
-    "📄 Resume Improvements",
-):
-
-    improvements = reasoning.get(
-        "resume_improvements",
-        [],
-    )
+with st.expander("📄 Grounded Resume Improvements", expanded=True):
+    improvements = reasoning.get("resume_improvements", [])
 
     if improvements:
-
         for item in improvements:
             st.markdown(f"• {item}")
-
     else:
-
         st.markdown(
             '<div class="empty-state">'
             "No role-specific resume improvements were identified."
@@ -599,22 +604,13 @@ with st.expander(
 # THINGS TO CONSIDER
 # --------------------------------------------------
 
-with st.expander(
-    "💡 Things to Consider",
-):
-
-    considerations = reasoning.get(
-        "things_to_consider",
-        [],
-    )
+with st.expander("💡 Things to Consider"):
+    considerations = reasoning.get("things_to_consider", [])
 
     if considerations:
-
         for item in considerations:
             st.markdown(f"• {item}")
-
     else:
-
         st.markdown(
             '<div class="empty-state">'
             "No additional considerations were identified."
@@ -629,8 +625,7 @@ with st.expander(
 
 st.divider()
 
-st.caption(f"Reasoning model: {reasoning.get('_model', 'Unknown')}")
-
+st.caption(f"Reasoning engine: {reasoning.get('_model', 'Unknown')}")
 st.caption(
-    "JobShield provides decision support based on the supplied resume and job description."
+    "JobShield provides grounded decision support based on retrieved resume evidence, live web verification, and the supplied job description."
 )
