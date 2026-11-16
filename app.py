@@ -15,7 +15,21 @@ from analysis.analyzer import analyze_risk, analyze_reasoning
 
 load_dotenv()
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+api_key = os.getenv("GROQ_API_KEY")
+
+if not api_key:
+    try:
+        api_key = st.secrets["GROQ_API_KEY"]
+    except Exception:
+        api_key = None
+
+if not api_key:
+    st.error(
+        "GROQ_API_KEY is missing. Configure it in your environment or app secrets."
+    )
+    st.stop()
+
+client = Groq(api_key=api_key)
 
 st.set_page_config(
     page_title="JobShield",
@@ -109,6 +123,7 @@ defaults = {
     "reasoning": None,
     "risk_confirmed": False,
     "analysis_started": False,
+    "risk_analysis_enabled": False,
 }
 
 for key, value in defaults.items():
@@ -179,6 +194,7 @@ if st.button(
     st.session_state.reasoning = None
     st.session_state.risk_confirmed = False
     st.session_state.analysis_started = False
+    st.session_state.risk_analysis_enabled = risk_enabled
 
     # Validate inputs
     if not uploaded_resume:
@@ -280,9 +296,9 @@ risk_result = st.session_state.risk_result
 # --------------------------------------------------
 
 if (
-    risk_enabled
+    st.session_state.risk_analysis_enabled
     and risk_result
-    and risk_result.get("risk_score", 0) >= 70
+    and risk_result.get("requires_confirmation", False)
     and not st.session_state.risk_confirmed
 ):
 
@@ -362,7 +378,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if risk_enabled:
+if st.session_state.risk_analysis_enabled:
 
     risk_score = risk_result.get("risk_score", 0)
 

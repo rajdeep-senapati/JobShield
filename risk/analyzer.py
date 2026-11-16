@@ -1,9 +1,18 @@
 import json
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from groq import Groq
 
 MODEL = "openai/gpt-oss-20b"
 RISK_THRESHOLD = 70
+
+
+class RiskAnalysis(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    risk_score: int = Field(ge=0, le=100)
+    signals: list[str] = Field(default_factory=list)
+    explanations: list[str] = Field(default_factory=list)
 
 
 def assess_risk(
@@ -18,10 +27,8 @@ Return ONLY valid JSON:
 
 {{
     "risk_score": 0,
-    "risk_level": "low",
     "signals": [],
-    "explanations": [],
-    "requires_confirmation": false
+    "explanations": []
 }}
 
 Rules:
@@ -35,7 +42,6 @@ Rules:
   guaranteed employment, and other suspicious recruitment patterns.
 - Do not claim the job is definitely a scam.
 - Keep explanations concise.
-- requires_confirmation must be true when score >= 70.
 
 JOB DESCRIPTION:
 {job_text}
@@ -53,4 +59,36 @@ JOB DESCRIPTION:
         response_format={"type": "json_object"},
     )
 
-    return json.loads(response.choices[0].message.content)
+    content = response.choices[0].message.content
+
+    if not content:
+        raise ValueError("The risk analysis model returned an empty response.")
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"The risk analysis model returned invalid JSON: {exc}"
+        ) from exc
+
+    try:
+        risk = RiskAnalysis.model_validate(parsed)
+    except ValidationError as exc:
+        raise ValueError(
+            f"The risk analysis model returned an invalid response: {exc}"
+        ) from exc
+
+    result = risk.model_dump()
+
+    score = result["risk_score"]
+
+    if score >= RISK_THRESHOLD:
+        result["risk_level"] = "high"
+    elif score >= 30:
+        result["risk_level"] = "medium"
+    else:
+        result["risk_level"] = "low"
+
+    result["requires_confirmation"] = score >= RISK_THRESHOLD
+
+    return result

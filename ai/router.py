@@ -1,9 +1,11 @@
-import os
+import logging
 
 from groq import Groq
 
 PRIMARY_MODEL = "openai/gpt-oss-120b"
 FALLBACK_MODEL = "qwen/qwen3.8-27b"
+
+logger = logging.getLogger(__name__)
 
 
 def get_reasoning_response(
@@ -25,16 +27,29 @@ def get_reasoning_response(
             "fallback_used": False,
         }
 
-    except Exception:
-        response = client.chat.completions.create(
-            model=FALLBACK_MODEL,
-            messages=messages,
-            temperature=0,
-            stream=stream,
+    except Exception as primary_error:
+        logger.warning(
+            "Primary reasoning model failed (%s). Trying fallback model.",
+            type(primary_error).__name__,
         )
 
-        return {
-            "response": response,
-            "model": FALLBACK_MODEL,
-            "fallback_used": True,
-        }
+        try:
+            response = client.chat.completions.create(
+                model=FALLBACK_MODEL,
+                messages=messages,
+                temperature=0,
+                stream=stream,
+            )
+
+            return {
+                "response": response,
+                "model": FALLBACK_MODEL,
+                "fallback_used": True,
+            }
+
+        except Exception as fallback_error:
+            raise RuntimeError(
+                "Both reasoning models failed. "
+                f"Primary error: {type(primary_error).__name__}; "
+                f"fallback error: {type(fallback_error).__name__}."
+            ) from fallback_error

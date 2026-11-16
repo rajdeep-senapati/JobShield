@@ -1,7 +1,57 @@
 import json
-import streamlit as st
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ai.router import get_reasoning_response
+
+
+class Strength(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    point: str
+    evidence: str
+
+
+class Gap(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    point: str
+    job_requirement: str
+
+
+class JobReasoning(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    match_score: int = Field(ge=0, le=100)
+    match_summary: str
+    strengths: list[Strength] = Field(default_factory=list)
+    gaps: list[Gap] = Field(default_factory=list)
+    why_this_matches: list[str] = Field(default_factory=list)
+    resume_improvements: list[str] = Field(default_factory=list)
+    things_to_consider: list[str] = Field(default_factory=list)
+
+
+def _extract_json(content: str) -> dict:
+    """Extract the first valid JSON object from model output."""
+
+    if not content or not content.strip():
+        raise ValueError("The reasoning model returned an empty response.")
+
+    decoder = json.JSONDecoder()
+    start = content.find("{")
+
+    if start == -1:
+        raise ValueError("The reasoning model did not return a JSON object.")
+
+    try:
+        result, _ = decoder.raw_decode(content[start:])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"The reasoning model returned invalid JSON: {exc}") from exc
+
+    if not isinstance(result, dict):
+        raise ValueError("The reasoning response must be a JSON object.")
+
+    return result
 
 
 def generate_job_reasoning(
@@ -82,25 +132,18 @@ JOB DESCRIPTION:
         stream=False,
     )
 
-    content = result["response"].choices[0].message.content.strip()
-    import streamlit as st
-
-    st.write("### DEBUG — RAW 120B RESPONSE")
-    st.code(content)
-
-    decoder = json.JSONDecoder()
-
-    start = content.find("{")
-
-    if start == -1:
-        raise ValueError("Model did not return JSON.")
+    content = result["response"].choices[0].message.content
+    parsed = _extract_json(content)
 
     try:
-        reasoning, _ = decoder.raw_decode(content[start:])
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Model returned invalid JSON: {e}")
+        reasoning = JobReasoning.model_validate(parsed)
+    except ValidationError as exc:
+        raise ValueError(
+            f"The reasoning model returned an invalid response: {exc}"
+        ) from exc
 
-    reasoning["_model"] = result["model"]
-    reasoning["_fallback_used"] = result["fallback_used"]
+    output = reasoning.model_dump()
+    output["_model"] = result["model"]
+    output["_fallback_used"] = result["fallback_used"]
 
-    return reasoning
+    return output
